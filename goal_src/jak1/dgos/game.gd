@@ -244,6 +244,7 @@
   "ambient.o"
   "assert.o"
   "generic-obs.o"
+  "board-h.o"
   "target-util.o"
   "target-part.o"
   "collide-reaction-target.o"
@@ -254,6 +255,10 @@
   "target.o"
   "target2.o"
   "target-death.o"
+  "board-util.o"
+  "target-board.o"
+  "board-part.o"
+  "board-states.o"
   "menu.o"
   "drawable.o"
   "drawable-group.o"
@@ -327,6 +332,9 @@
   "eichar-ag.go"
   "sidekick-ag.go"
   "deathcam-ag.go"
+  "board-ag.go"
+  "eichar-board+0-ag.go"
+  "sidekick-board+0-ag.go"
   "game-cnt.go"
   "rigid-body-h.o"
   "water-anim.o"
@@ -347,6 +355,7 @@
   "ropebridge.o"
   "ticky.o"
   "hud-classes-pc.o" ;; added
+  "board-overrides.o"
   "mod-settings.o" ;; added mod-base-change
   "mod-common-functions.o" ;; added
   "orb-placer.o" ;; added

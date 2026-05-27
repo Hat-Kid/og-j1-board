@@ -1,5 +1,6 @@
 #include "build_sbk.h"
 
+#include <array>
 #include <algorithm>
 #include <climits>
 #include <cstring>

@@ -119,8 +119,6 @@
 
 (define-extern pre-collide-setup (function none :behavior target))
 
-(define-extern board-bend-gravity (function none :behavior target))
-
 (defmacro remap-frame (in old-max-frame new-max-frame)
   `(* (/ ,in ,old-max-frame) ,new-max-frame))
 

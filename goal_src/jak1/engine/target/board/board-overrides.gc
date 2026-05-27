@@ -685,67 +685,6 @@
   0
   (none))
 
-(defbehavior board-bend-gravity target ()
-  (if (and (logtest? (-> self control root-prim prim-core action) (collide-action no-normal-reset))
-           (not (logtest? (-> self control status) (cshape-moving-flags onsurf))))
-    (return #f))
-  (let ((f0-1 (if (and (logtest? (-> self control status) (cshape-moving-flags twall))
-                       (not (logtest? (-> self control status) (cshape-moving-flags onsurf))))
-                0.0
-                (-> self control bend-target))))
-    (seek! (-> self control bend-amount) f0-1 (* (-> self control bend-speed) (seconds-per-frame))))
-  (vector-copy! (-> self control dynam gravity-normal) (-> self control standard-dynamics gravity-normal))
-  (vector-float*! (-> self control dynam gravity)
-                  (-> self control dynam gravity-normal)
-                  (the-as float (-> self control dynam gravity-length)))
-  (let ((s5-0 (new 'stack-no-clear 'vector)))
-    (let ((f30-0 (-> self control current-surface tiltvv))
-          (gp-0 (-> self control gspot-normal)))
-      (vector-deg-slerp s5-0 (-> self control standard-dynamics gravity-normal) gp-0 (-> self control bend-amount))
-      (let ((a2-3 (matrix-from-two-vectors-smooth! (new 'stack-no-clear 'matrix)
-                                                   (-> self control bent-gravity-normal)
-                                                   s5-0
-                                                   f30-0
-                                                   (the int (-> self control current-surface tiltvvf)))))
-        (vector-matrix*! (-> self control bent-gravity-normal) (-> self control bent-gravity-normal) a2-3))
-      (vector-normalize! (-> self control bent-gravity-normal) 1.0)
-      (add-debug-vector *display-target-marks*
-                        (bucket-id debug-no-zbuf)
-                        (-> self control trans)
-                        gp-0
-                        (meters 2)
-                        (new 'static 'rgba :b #xff :a #x80))))
-  (add-debug-vector *display-target-marks*
-                    (bucket-id debug-no-zbuf)
-                    (-> self control trans)
-                    (-> self control local-normal)
-                    (meters 2)
-                    (the-as rgba (new 'static 'rgba :r #xff :a #x80)))
-  (add-debug-vector *display-target-marks*
-                    (bucket-id debug-no-zbuf)
-                    (-> self control trans)
-                    (-> self control standard-dynamics gravity-normal)
-                    (meters 2.5)
-                    (the-as rgba (new 'static 'rgba :r #xff :a #x80)))
-  (add-debug-vector *display-target-marks*
-                    (bucket-id debug-no-zbuf)
-                    (-> self control trans)
-                    (-> self control dynam gravity-normal)
-                    (meters 3)
-                    (the-as rgba (new 'static 'rgba :r #xff :b #xff :a #x80)))
-  (add-debug-vector *display-target-marks*
-                    (bucket-id debug-no-zbuf)
-                    (-> self control trans)
-                    (-> self control bent-gravity-normal)
-                    (meters 3)
-                    (the-as rgba (new 'static 'rgba :r #xff :b #xff :a #x80)))
-  (add-debug-vector *display-target-marks*
-                    (bucket-id debug-no-zbuf)
-                    (-> self control trans)
-                    (vector-y-quaternion! (new 'stack-no-clear 'vector) (-> self control quat-for-control))
-                    (meters 3)
-                    (the-as rgba (new 'static 'rgba :r #xff :a #x80))))
-
 (defbehavior target-calc-camera-pos target ()
   (let ((gp-0 (new 'stack-no-clear 'vector)))
     (cond

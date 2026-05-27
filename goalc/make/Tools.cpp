@@ -481,23 +481,23 @@ bool BuildSbkTool::run(const ToolInput& task, const PathMap&) {
   if (task.input.size() > 3)
     opts.jak1_format = task.input.at(3) == "#t";
 
-  std::vector<sbk::SoundSpec> specs;
-  auto manifest = m_reader.read_from_string(task.input.at(4));
-  if (!manifest.as_pair()->cdr.is_empty_list()) {
-    goos::for_each_in_list(manifest.as_pair()->cdr.as_pair()->car, [&](const goos::Object& o) {
-      std::vector<fs::path> wavs;
-      auto map = o.as_pair();
-      auto car = task.input.at(0) + "/" + std::string(map->car.as_symbol().name_ptr) + ".wav";
-      wavs.emplace_back(car);
-      if (!map->cdr.is_empty_list()) {
-        goos::for_each_in_list(map->cdr, [&](const goos::Object& obj) {
-          wavs.emplace_back(task.input.at(0) + "/" + std::string(obj.as_symbol().name_ptr) +
-                            ".wav");
-        });
-      }
-      specs.emplace_back(wavs);
-    });
-  }
+  // std::vector<sbk::SoundSpec> specs;
+  // auto manifest = m_reader.read_from_string(task.input.at(4));
+  // if (!manifest.as_pair()->cdr.is_empty_list()) {
+  //   goos::for_each_in_list(manifest.as_pair()->cdr.as_pair()->car, [&](const goos::Object& o) {
+  //     std::vector<fs::path> wavs;
+  //     auto map = o.as_pair();
+  //     auto car = task.input.at(0) + "/" + std::string(map->car.as_symbol().name_ptr) + ".wav";
+  //     wavs.emplace_back(car);
+  //     if (!map->cdr.is_empty_list()) {
+  //       goos::for_each_in_list(map->cdr, [&](const goos::Object& obj) {
+  //         wavs.emplace_back(task.input.at(0) + "/" + std::string(obj.as_symbol().name_ptr) +
+  //                           ".wav");
+  //       });
+  //     }
+  //     specs.emplace_back(wavs);
+  //   });
+  // }
 
   sbk::create_sbk_from_dir(file_util::get_file_path({task.input.at(0)}),
                            file_util::get_file_path({task.output.at(0)}), opts);

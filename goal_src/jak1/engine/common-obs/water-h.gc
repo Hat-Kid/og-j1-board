@@ -76,7 +76,9 @@
    (drip-time         time-frame)
    (drip-speed        float)
    (drip-height       meters)
-   (drip-mult         float))
+   (drip-mult         float)
+   ;; og:j1-board added
+   (collide-height    meters))
   (:methods
    (new (symbol type process int float float float) _type_)
    (water-control-method-9 (_type_) none)

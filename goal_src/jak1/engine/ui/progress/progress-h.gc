@@ -133,6 +133,8 @@
      (save-and-load-game)
      (memcard-saving-and-loading)
      (memcard-data-exists-save-and-load)
+     ;; og:j1-board added
+     (mod-options)
      ;; the last one!
      (max))
    (defenum game-option-type

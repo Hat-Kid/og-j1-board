@@ -1,5 +1,7 @@
 #include "fr3_to_gltf.h"
 
+#include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 #include "common/custom_data/Tfrag3Data.h"
@@ -323,10 +325,9 @@ int make_color_buffer_accessor(const std::vector<tfrag3::MercVertex>& vertices,
   std::vector<float> floats;
 
   for (size_t i = 0; i < vertices.size(); i++) {
-    for (int j = 0; j < 3; j++) {
+    for (int j = 0; j < 4; j++) {
       floats.push_back(((float)vertices[i].rgba[j]) / 255.f);
     }
-    floats.push_back(1.f);
   }
   memcpy(buffer.data.data(), floats.data(), sizeof(float) * floats.size());
 
@@ -879,6 +880,354 @@ int make_inv_matrix_bind_poses(const std::vector<level_tools::Joint>& joints,
   return accessor_idx;
 }
 
+// Decompose a trs matrix (column-major, trans scaled by 4096) into
+// separate translation (meters), quaternion (xyzw), and scale components, and append one frame
+// of data to the given joint animation.
+void decompose_matrix_frame(level_tools::UncompressedSingleJointAnim& joint,
+                            const math::Matrix4f& mat) {
+  joint.trans_frames.push_back({mat(0, 3) / 4096.f, mat(1, 3) / 4096.f, mat(2, 3) / 4096.f});
+
+  // Scale: L2-norm of each column of the top-left 3x3 block.
+  math::Vector3f scale;
+  for (int col = 0; col < 3; col++) {
+    scale[col] = std::sqrt(mat(0, col) * mat(0, col) + mat(1, col) * mat(1, col) +
+                           mat(2, col) * mat(2, col));
+  }
+  joint.scale_frames.push_back(scale);
+
+  // Rotation: normalize each column by its scale to recover R, then convert to quaternion via
+  // Shepperd's method.
+  math::Matrix4f R = mat;
+  for (int col = 0; col < 3; col++) {
+    float inv = (scale[col] > 0.f) ? 1.f / scale[col] : 0.f;
+    R(0, col) *= inv;
+    R(1, col) *= inv;
+    R(2, col) *= inv;
+  }
+  float trace = R(0, 0) + R(1, 1) + R(2, 2);
+  math::Vector4f q;
+  if (trace > 0.f) {
+    float s = 0.5f / std::sqrt(trace + 1.f);
+    q.w() = 0.25f / s;
+    q.x() = (R(2, 1) - R(1, 2)) * s;
+    q.y() = (R(0, 2) - R(2, 0)) * s;
+    q.z() = (R(1, 0) - R(0, 1)) * s;
+  } else if (R(0, 0) > R(1, 1) && R(0, 0) > R(2, 2)) {
+    float s = 2.f * std::sqrt(1.f + R(0, 0) - R(1, 1) - R(2, 2));
+    q.w() = (R(2, 1) - R(1, 2)) / s;
+    q.x() = 0.25f * s;
+    q.y() = (R(0, 1) + R(1, 0)) / s;
+    q.z() = (R(0, 2) + R(2, 0)) / s;
+  } else if (R(1, 1) > R(2, 2)) {
+    float s = 2.f * std::sqrt(1.f + R(1, 1) - R(0, 0) - R(2, 2));
+    q.w() = (R(0, 2) - R(2, 0)) / s;
+    q.x() = (R(0, 1) + R(1, 0)) / s;
+    q.y() = 0.25f * s;
+    q.z() = (R(1, 2) + R(2, 1)) / s;
+  } else {
+    float s = 2.f * std::sqrt(1.f + R(2, 2) - R(0, 0) - R(1, 1));
+    q.w() = (R(1, 0) - R(0, 1)) / s;
+    q.x() = (R(0, 2) + R(2, 0)) / s;
+    q.y() = (R(1, 2) + R(2, 1)) / s;
+    q.z() = 0.25f * s;
+  }
+  joint.quat_frames.push_back(q);
+}
+
+level_tools::UncompressedJointAnim decompress_anim(const level_tools::ArtJointAnim& art_anim) {
+  constexpr float kQuatScale = 0.000030517578125f;
+  constexpr float kScaleScale = 0.000244140625f;
+  constexpr float kTransScale = 4.f / 4096.f;
+
+  auto read_f32 = [](const u8*& ptr) -> float {
+    float v;
+    memcpy(&v, ptr, 4);
+    ptr += 4;
+    return v;
+  };
+  auto read_s16 = [](const u8*& ptr) -> float {
+    s16 v;
+    memcpy(&v, ptr, 2);
+    ptr += 2;
+    return v;
+  };
+
+  const auto& ctrl = art_anim.frames;
+  const auto& fixed = ctrl.fixed;
+  const auto& hdr = fixed.hdr;
+  int num_joints = (int)hdr.num_joints;
+  int total_frames = (int)ctrl.num_frames;
+
+  level_tools::UncompressedJointAnim out;
+  out.name = art_anim.name;
+  out.framerate = art_anim.speed > 0.f ? art_anim.speed * 60.f : 30.f;
+  out.frames = total_frames;
+  out.joints.resize(2 + num_joints);
+
+  auto d64 = (const u8*)fixed.data64.data();
+  auto d32 = (const u8*)fixed.data32.data();
+  auto d16 = (const u8*)fixed.data16.data();
+
+  // Read the fixed (constant) matrix for each matrix joint if present.
+  math::Matrix4f fixed_mats[2];
+  for (int mi = 0; mi < 2; mi++) {
+    if (fixed.mat[mi]) {
+      memcpy(&fixed_mats[mi], d64, sizeof(math::Matrix4f));
+      d64 += sizeof(math::Matrix4f);
+    } else {
+      fixed_mats[mi] = math::Matrix4f::identity();
+    }
+  }
+
+  for (int tqi = 0; tqi < num_joints; tqi++) {
+    int ctrl_idx = tqi / 8;
+    int ctrl_shift = 4 * (tqi % 8);
+    int c = 0xf & (hdr.control_bits[ctrl_idx] >> ctrl_shift);
+    auto& joint = out.joints[2 + tqi];
+
+    if (!(c & 0b0001)) {
+      math::Vector3f t;
+      if (c & 0b1000) {
+        t.x() = read_f32(d64) / 4096.f;
+        t.y() = read_f32(d64) / 4096.f;
+        t.z() = read_f32(d32) / 4096.f;
+      } else {
+        t.x() = read_s16(d32) * kTransScale;
+        t.y() = read_s16(d32) * kTransScale;
+        t.z() = read_s16(d16) * kTransScale;
+      }
+      joint.trans_frames.push_back(t);
+    }
+
+    if (!(c & 0b0010)) {
+      math::Vector4f q;
+      q.x() = read_s16(d64) * kQuatScale;
+      q.y() = read_s16(d64) * kQuatScale;
+      q.z() = read_s16(d64) * kQuatScale;
+      q.w() = read_s16(d64) * kQuatScale;
+      joint.quat_frames.push_back(q);
+    }
+
+    if (!(c & 0b0100)) {
+      math::Vector3f s;
+      s.x() = read_s16(d32) * kScaleScale;
+      s.y() = read_s16(d32) * kScaleScale;
+      s.z() = read_s16(d16) * kScaleScale;
+      joint.scale_frames.push_back(s);
+    }
+  }
+
+  for (int fi = 0; fi < total_frames; fi++) {
+    const auto& frame = ctrl.frame[fi];
+    const u8* data64 = (const u8*)frame.data64.data();
+    const u8* data32 = (const u8*)frame.data32.data();
+    const u8* data16 = (const u8*)frame.data16.data();
+
+    // Read and decompose the per-frame matrix joints (align=0, prejoint=1).
+    for (int mi = 0; mi < 2; mi++) {
+      if (!fixed.mat[mi]) {
+        math::Matrix4f mat;
+        memcpy(&mat, data64, sizeof(math::Matrix4f));
+        data64 += sizeof(math::Matrix4f);
+        decompose_matrix_frame(out.joints[mi], mat);
+      }
+    }
+
+    for (int tqi = 0; tqi < num_joints; tqi++) {
+      int ctrl_idx = tqi / 8;
+      int ctrl_shift = 4 * (tqi % 8);
+      int c = 0xf & (hdr.control_bits[ctrl_idx] >> ctrl_shift);
+      auto& joint = out.joints[2 + tqi];
+
+      if (c & 0b0001) {
+        math::Vector3f t;
+        if (c & 0b1000) {
+          t.x() = read_f32(data64) / 4096.f;
+          t.y() = read_f32(data64) / 4096.f;
+          t.z() = read_f32(data32) / 4096.f;
+        } else {
+          t.x() = read_s16(data32) * kTransScale;
+          t.y() = read_s16(data32) * kTransScale;
+          t.z() = read_s16(data16) * kTransScale;
+        }
+        joint.trans_frames.push_back(t);
+      }
+
+      if (c & 0b0010) {
+        math::Vector4f q;
+        q.x() = read_s16(data64) * kQuatScale;
+        q.y() = read_s16(data64) * kQuatScale;
+        q.z() = read_s16(data64) * kQuatScale;
+        q.w() = read_s16(data64) * kQuatScale;
+        joint.quat_frames.push_back(q);
+      }
+
+      if (c & 0b0100) {
+        math::Vector3f s;
+        s.x() = read_s16(data32) * kScaleScale;
+        s.y() = read_s16(data32) * kScaleScale;
+        s.z() = read_s16(data16) * kScaleScale;
+        joint.scale_frames.push_back(s);
+      }
+    }
+  }
+
+  // Fill constant matrix joints (fixed.mat[mi]=true) by repeating the single fixed-section matrix
+  // for every frame so the channel length matches total_frames.
+  for (int mi = 0; mi < 2; mi++) {
+    if (fixed.mat[mi]) {
+      for (int fi = 0; fi < total_frames; fi++) {
+        decompose_matrix_frame(out.joints[mi], fixed_mats[mi]);
+      }
+    }
+  }
+
+  // Fill partially-populated regular joints.
+  for (int ji = 2; ji < (int)out.joints.size(); ji++) {
+    auto& joint = out.joints[ji];
+    while ((int)joint.trans_frames.size() < total_frames) {
+      if (joint.trans_frames.empty())
+        joint.trans_frames.emplace_back(0.f, 0.f, 0.f);
+      else
+        joint.trans_frames.push_back(joint.trans_frames[0]);
+    }
+    while ((int)joint.quat_frames.size() < total_frames) {
+      if (joint.quat_frames.empty())
+        joint.quat_frames.emplace_back(0.f, 0.f, 0.f, 1.f);
+      else
+        joint.quat_frames.push_back(joint.quat_frames[0]);
+    }
+    while ((int)joint.scale_frames.size() < total_frames) {
+      if (joint.scale_frames.empty())
+        joint.scale_frames.emplace_back(1.f, 1.f, 1.f);
+      else
+        joint.scale_frames.push_back(joint.scale_frames[0]);
+    }
+  }
+
+  return out;
+}
+
+int make_anim_float_accessor(const std::vector<float>& values, tinygltf::Model& model) {
+  int buf_idx = (int)model.buffers.size();
+  auto& buf = model.buffers.emplace_back();
+  buf.data.resize(values.size() * sizeof(float));
+  memcpy(buf.data.data(), values.data(), buf.data.size());
+
+  int bv_idx = (int)model.bufferViews.size();
+  auto& bv = model.bufferViews.emplace_back();
+  bv.buffer = buf_idx;
+  bv.byteOffset = 0;
+  bv.byteLength = buf.data.size();
+
+  int acc_idx = (int)model.accessors.size();
+  auto& acc = model.accessors.emplace_back();
+  acc.bufferView = bv_idx;
+  acc.byteOffset = 0;
+  acc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+  acc.count = (int)values.size();
+  acc.type = TINYGLTF_TYPE_SCALAR;
+  if (!values.empty()) {
+    float mn = values[0], mx = values[0];
+    for (float v : values) {
+      mn = std::min(mn, v);
+      mx = std::max(mx, v);
+    }
+    acc.minValues = {(double)mn};
+    acc.maxValues = {(double)mx};
+  }
+  return acc_idx;
+}
+
+int make_anim_vec3_accessor(const std::vector<math::Vector3f>& values, tinygltf::Model& model) {
+  static_assert(sizeof(math::Vector3f) == 3 * sizeof(float));
+  int buf_idx = (int)model.buffers.size();
+  auto& buf = model.buffers.emplace_back();
+  buf.data.resize(values.size() * sizeof(math::Vector3f));
+  memcpy(buf.data.data(), values.data(), buf.data.size());
+
+  int bv_idx = (int)model.bufferViews.size();
+  auto& bv = model.bufferViews.emplace_back();
+  bv.buffer = buf_idx;
+  bv.byteOffset = 0;
+  bv.byteLength = buf.data.size();
+
+  int acc_idx = (int)model.accessors.size();
+  auto& acc = model.accessors.emplace_back();
+  acc.bufferView = bv_idx;
+  acc.byteOffset = 0;
+  acc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+  acc.count = (int)values.size();
+  acc.type = TINYGLTF_TYPE_VEC3;
+  return acc_idx;
+}
+
+int make_anim_vec4_accessor(const std::vector<math::Vector4f>& values, tinygltf::Model& model) {
+  static_assert(sizeof(math::Vector4f) == 4 * sizeof(float));
+  int buf_idx = (int)model.buffers.size();
+  auto& buf = model.buffers.emplace_back();
+  buf.data.resize(values.size() * sizeof(math::Vector4f));
+  memcpy(buf.data.data(), values.data(), buf.data.size());
+
+  int bv_idx = (int)model.bufferViews.size();
+  auto& bv = model.bufferViews.emplace_back();
+  bv.buffer = buf_idx;
+  bv.byteOffset = 0;
+  bv.byteLength = buf.data.size();
+
+  int acc_idx = (int)model.accessors.size();
+  auto& acc = model.accessors.emplace_back();
+  acc.bufferView = bv_idx;
+  acc.byteOffset = 0;
+  acc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+  acc.count = (int)values.size();
+  acc.type = TINYGLTF_TYPE_VEC4;
+  return acc_idx;
+}
+
+void add_animation_to_gltf(const level_tools::UncompressedJointAnim& anim,
+                           const tinygltf::Skin& skin,
+                           tinygltf::Model& model) {
+  if (anim.frames == 0)
+    return;
+
+  auto& gltf_anim = model.animations.emplace_back();
+  gltf_anim.name = anim.name;
+
+  std::vector<float> times(anim.frames);
+  for (int i = 0; i < anim.frames; i++)
+    times[i] = i / anim.framerate;
+  int time_acc = make_anim_float_accessor(times, model);
+
+  int n_anim_joints = (int)anim.joints.size();
+  int n_skin_joints = (int)skin.joints.size();
+
+  auto add_channel = [&](int target_node, int val_acc, const std::string& path) {
+    int si = (int)gltf_anim.samplers.size();
+    auto& sampler = gltf_anim.samplers.emplace_back();
+    sampler.input = time_acc;
+    sampler.output = val_acc;
+    sampler.interpolation = "LINEAR";
+    auto& channel = gltf_anim.channels.emplace_back();
+    channel.sampler = si;
+    channel.target_node = target_node;
+    channel.target_path = path;
+  };
+
+  // Export matrix joints (align=0, prejoint=1) and regular joints (2+).
+  for (int ji = 0; ji < n_anim_joints && ji < n_skin_joints; ji++) {
+    const auto& joint = anim.joints[ji];
+    int target_node = skin.joints[ji];
+
+    if ((int)joint.trans_frames.size() == anim.frames)
+      add_channel(target_node, make_anim_vec3_accessor(joint.trans_frames, model), "translation");
+    if ((int)joint.quat_frames.size() == anim.frames)
+      add_channel(target_node, make_anim_vec4_accessor(joint.quat_frames, model), "rotation");
+    if ((int)joint.scale_frames.size() == anim.frames)
+      add_channel(target_node, make_anim_vec3_accessor(joint.scale_frames, model), "scale");
+  }
+}
+
 void add_merc(const tfrag3::Level& level,
               const std::map<std::string, level_tools::ArtData>& art_data,
               const tfrag3::MercModel& mmodel,
@@ -956,13 +1305,88 @@ void add_merc(const tfrag3::Level& level,
     skin.inverseBindMatrices = make_inv_matrix_bind_poses(game_bones, model);
   }
 
+  if (art != art_data.end() && !art->second.anims.empty() && node.skin >= 0 &&
+      node.skin < model.skins.size()) {
+    const auto& skin = model.skins[node.skin];
+    for (const auto& ja : art->second.anims) {
+      auto uncompressed = decompress_anim(ja);
+      add_animation_to_gltf(uncompressed, skin, model);
+    }
+  }
+
+  // Shared 1×1 metallic-roughness control image for all envmap effects in this model.
+  // Blue channel (metallic) = 255 encodes full envmap strength; process_envmap_merc_draw
+  // divides by 4 to get a PS2-range alpha value.
+  int envmap_mr_image_idx = -1;
+
   for (size_t effect_idx = 0; effect_idx < mmodel.effects.size(); effect_idx++) {
     const auto& effect = mmodel.effects[effect_idx];
     for (size_t draw_idx = 0; draw_idx < effect.all_draws.size(); draw_idx++) {
       const auto& draw = effect.all_draws[draw_idx];
+      int mat_idx = add_material_for_tex(level, model, draw.tree_tex_id, tex_image_map, draw.mode);
+
+      if (effect.has_envmap) {
+        if (effect.envmap_texture > level.textures.size()) {
+          continue;
+        }
+        if (std::ranges::find_if(model.extensionsUsed, [&](const std::string& ext) {
+              return ext == "KHR_materials_specular";
+            }) == model.extensionsUsed.end()) {
+          model.extensionsUsed.emplace_back("KHR_materials_specular");
+        }
+
+        if (envmap_mr_image_idx < 0) {
+          envmap_mr_image_idx = (int)model.images.size();
+          auto& mr_img = model.images.emplace_back();
+          mr_img.width = 1;
+          mr_img.height = 1;
+          mr_img.component = 4;
+          mr_img.bits = 8;
+          mr_img.pixel_type = TINYGLTF_TEXTURE_TYPE_UNSIGNED_BYTE;
+          mr_img.mimeType = "image/png";
+          mr_img.name = "envmap-mr-control";
+          mr_img.image = {0, 0, 255, 255};
+        }
+
+        int mr_tex_idx = (int)model.textures.size();
+        auto& mr_tex_obj = model.textures.emplace_back();
+        mr_tex_obj.source = envmap_mr_image_idx;
+        mr_tex_obj.sampler = (int)model.samplers.size();
+        auto& mr_sampler = model.samplers.emplace_back();
+        mr_sampler.minFilter = TINYGLTF_TEXTURE_FILTER_NEAREST;
+        mr_sampler.magFilter = TINYGLTF_TEXTURE_FILTER_NEAREST;
+        mr_sampler.wrapS = TINYGLTF_TEXTURE_WRAP_REPEAT;
+        mr_sampler.wrapT = TINYGLTF_TEXTURE_WRAP_REPEAT;
+        model.materials[mat_idx].pbrMetallicRoughness.metallicRoughnessTexture.index = mr_tex_idx;
+
+        int env_tex_idx = (int)model.textures.size();
+        auto& env_tex_obj = model.textures.emplace_back();
+        env_tex_obj.source = add_image_for_tex(level, model, effect.envmap_texture, tex_image_map);
+        env_tex_obj.sampler = (int)model.samplers.size();
+        auto& env_sampler = model.samplers.emplace_back();
+        env_sampler.minFilter = effect.envmap_mode.get_filt_enable()
+                                    ? TINYGLTF_TEXTURE_FILTER_LINEAR
+                                    : TINYGLTF_TEXTURE_FILTER_NEAREST;
+        env_sampler.magFilter = effect.envmap_mode.get_filt_enable()
+                                    ? TINYGLTF_TEXTURE_FILTER_LINEAR
+                                    : TINYGLTF_TEXTURE_FILTER_NEAREST;
+        env_sampler.wrapS = effect.envmap_mode.get_clamp_s_enable()
+                                ? TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE
+                                : TINYGLTF_TEXTURE_WRAP_REPEAT;
+        env_sampler.wrapT = effect.envmap_mode.get_clamp_t_enable()
+                                ? TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE
+                                : TINYGLTF_TEXTURE_WRAP_REPEAT;
+
+        tinygltf::Value::Object specular_color_tex;
+        specular_color_tex["index"] = tinygltf::Value(env_tex_idx);
+        tinygltf::Value::Object specular_ext;
+        specular_ext["specularColorTexture"] = tinygltf::Value(specular_color_tex);
+        model.materials[mat_idx].extensions["KHR_materials_specular"] =
+            tinygltf::Value(specular_ext);
+      }
+
       auto& prim = mesh.primitives.emplace_back();
-      prim.material =
-          add_material_for_tex(level, model, draw.tree_tex_id, tex_image_map, draw.mode);
+      prim.material = mat_idx;
       prim.indices =
           make_index_buffer_accessor(model, draw_to_start[effect_idx][draw_idx],
                                      draw_to_count[effect_idx][draw_idx], index_buffer_view);

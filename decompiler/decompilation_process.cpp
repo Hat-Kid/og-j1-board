@@ -11,6 +11,7 @@
 
 #include "Disasm/OpcodeInfo.h"
 #include "ObjectFile/ObjectFileDB.h"
+#include "data/extract_sbk.h"
 #include "data/streamed_audio.h"
 #include "level_extractor/extract_level.h"
 
@@ -293,8 +294,14 @@ int run_decompilation_process(decompiler::Config config,
 
   lg::info("[Mem] After extraction: {} MB", get_peak_rss() / (1024 * 1024));
 
+  if (config.rip_sound_banks) {
+    auto sfx_out = out_folder / "audio" / "sfx";
+    file_util::create_dir_if_needed(sfx_out);
+    extract_sbk_files(in_folder / "SBK", sfx_out);
+  }
+
   if (config.rip_streamed_audio) {
-    auto streaming_audio_out = out_folder / "audio";
+    auto streaming_audio_out = out_folder / "audio" / "streamed";
     file_util::create_dir_if_needed(streaming_audio_out);
     process_streamed_audio(config, streaming_audio_out, in_folder,
                            config.streamed_audio_file_names);

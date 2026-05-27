@@ -130,42 +130,76 @@ Joint convert_joint(const GltfJoint& joint,
   return Joint(joint.name, joint_index + prefix_joint_count, parent, fixed_matrix.transposed());
 }
 
-constexpr int kGltfToGameJointOffset = 1;
+constexpr int kGltfToGameJointOffset = 2;
+
+static int find_align_joint(const std::vector<GltfJoint>& gjoints) {
+  for (int i = 0; i < (int)gjoints.size(); i++) {
+    if (gjoints[i].name == "align") {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /*!
- * Convert GTLF joint list to game joint list.
- * Currently, this inserts a single "align" joint and places the root joint of the GLTF as the
- * prejoint. However, we might want to change this, to allow GLTF files to specify "align" at some
- * point.
+ * Convert GLTF joint list to game joint list.
+ * If the GLTF skeleton contains a bone named "align", it is mapped to joint 0 directly and
+ * all other bones follow at their GLTF index. Otherwise, an identity "align" joint is inserted at
+ * joint 0 and GLTF bones are shifted by kGltfToGameJointOffset.
  */
 std::vector<Joint> convert_joints(const std::vector<GltfJoint>& gjoints) {
   std::vector<Joint> joints;
-  joints.emplace_back("align", 0, -1, math::Matrix4f::identity());
-  ASSERT(kGltfToGameJointOffset == joints.size());
-  for (int gjoint_idx = 0; gjoint_idx < int(gjoints.size()); gjoint_idx++) {
-    // using -1 as the parent index since gltf's shouldn't be child of align.
-    joints.push_back(convert_joint(gjoints[gjoint_idx], gjoint_idx, kGltfToGameJointOffset, -1));
+  int align_idx = find_align_joint(gjoints);
+  if (align_idx >= 0) {
+    if (align_idx != 0) {
+      lg::warn("'align' bone found at GLTF index {} (expected 0), joint mapping may be incorrect",
+               align_idx);
+    }
+    // Include all joints directly: GLTF index == game joint index.
+    for (int gjoint_idx = 0; gjoint_idx < int(gjoints.size()); gjoint_idx++) {
+      joints.push_back(convert_joint(gjoints[gjoint_idx], gjoint_idx, 0, -1));
+    }
+  } else {
+    // No align bone — insert synthetic align (game 0) and prejoint (game 1), then GLTF joints.
+    joints.emplace_back("align", 0, -1, math::Matrix4f::identity());
+    joints.emplace_back("prejoint", 1, 0, math::Matrix4f::identity());
+    ASSERT(kGltfToGameJointOffset == (int)joints.size());
+    for (int gjoint_idx = 0; gjoint_idx < int(gjoints.size()); gjoint_idx++) {
+      // parent_of_gltf = 1 so root GLTF bones become children of synthetic prejoint.
+      joints.push_back(convert_joint(gjoints[gjoint_idx], gjoint_idx, kGltfToGameJointOffset, 1));
+    }
   }
 
   return joints;
 }
 
 std::vector<anim::CompressedAnim> process_anim(const tinygltf::Model& model,
-                                               const std::vector<GltfJoint>& gjoints) {
+                                               const std::vector<GltfJoint>& gjoints,
+                                               const std::string& master_art_group,
+                                               const std::map<std::string, int>& master_ag_map,
+                                               float framerate) {
   if (model.animations.empty()) {
     lg::warn("no animations detected!");  // TODO: make up a dummy one
     return {};
   }
 
+  bool has_align = find_align_joint(gjoints) >= 0;
   std::map<int, int> node_to_joint;
   for (size_t i = 0; i < gjoints.size(); i++) {
-    node_to_joint[gjoints[i].gltf_node_index] = i + kGltfToGameJointOffset;
+    // no offset when an align bone is present
+    node_to_joint[gjoints[i].gltf_node_index] =
+        has_align ? (int)i : (int)i + kGltfToGameJointOffset;
   }
 
   std::vector<anim::CompressedAnim> ret;
   for (auto& anim : model.animations) {
     lg::info("Processing animation {}", anim.name);
-    ret.push_back(
-        anim::compress_animation(anim::extract_anim_from_gltf(model, anim, node_to_joint, 60)));
+    int master_ag_idx = -1;
+    if (!master_ag_map.empty() && master_ag_map.find(anim.name) != master_ag_map.end()) {
+      master_ag_idx = master_ag_map.at(anim.name);
+    }
+    ret.push_back(anim::compress_animation(anim::extract_anim_from_gltf(
+        model, anim, node_to_joint, master_art_group, master_ag_idx, framerate)));
   }
   return ret;
 }

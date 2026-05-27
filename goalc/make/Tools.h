@@ -98,6 +98,9 @@ class BuildActorTool : public Tool {
   BuildActorTool();
   bool run(const ToolInput& task, const PathMap& path_map) override;
   bool needs_run(const ToolInput& task, const PathMap& path_map) override;
+
+ private:
+  goos::Reader m_reader;
 };
 
 class BuildActor2Tool : public Tool {
@@ -105,6 +108,9 @@ class BuildActor2Tool : public Tool {
   BuildActor2Tool();
   bool run(const ToolInput& task, const PathMap& path_map) override;
   bool needs_run(const ToolInput& task, const PathMap& path_map) override;
+
+ private:
+  goos::Reader m_reader;
 };
 
 class BuildActor3Tool : public Tool {
@@ -112,4 +118,27 @@ class BuildActor3Tool : public Tool {
   BuildActor3Tool();
   bool run(const ToolInput& task, const PathMap& path_map) override;
   bool needs_run(const ToolInput& task, const PathMap& path_map) override;
+
+ private:
+  goos::Reader m_reader;
+};
+
+class BuildSbkTool : public Tool {
+ public:
+  BuildSbkTool();
+  bool run(const ToolInput& task, const PathMap& path_map) override;
+  bool needs_run(const ToolInput& task, const PathMap& path_map) override;
+
+ private:
+  goos::Reader m_reader;
+};
+
+class AppendSbkTool : public Tool {
+ public:
+  AppendSbkTool();
+  bool run(const ToolInput& task, const PathMap& path_map) override;
+  bool needs_run(const ToolInput& task, const PathMap& path_map) override;
+
+ private:
+  goos::Reader m_reader;
 };

@@ -131,8 +131,16 @@ ArtJointAnim::ArtJointAnim(const anim::CompressedAnim& anim, const std::vector<J
   speed = 1.0f;
   artist_base = 0.0f;
   artist_step = 1.0f;
-  master_art_group_name = name;
-  master_art_group_index = 2;
+  if (!anim.master_art_group_name.empty()) {
+    master_art_group_name = anim.master_art_group_name;
+  } else {
+    master_art_group_name = name;
+  }
+  if (anim.master_art_group_index != -1) {
+    master_art_group_index = anim.master_art_group_index;
+  } else {
+    master_art_group_index = 2;
+  }
 }
 
 size_t JointAnimCompressedFrame::generate(DataObjectGenerator& gen) const {
@@ -569,7 +577,7 @@ int ArtGroup::get_joint_idx(const std::string& name) {
  */
 bool run_build_actor(const std::string& mdl_name,
                      const std::string& ag_out,
-                     const BuildActorParams& params) {
+                     const BuildActorParams3& params) {
   std::string ag_name;
   if (fs::exists(file_util::get_jak_project_dir() / mdl_name)) {
     ag_name = fs::path(mdl_name).stem().string();
@@ -584,12 +592,25 @@ bool run_build_actor(const std::string& mdl_name,
   if (skin_idx) {
     lg::info("GLTF file contained a skin, this actor will have a real skeleton");
   }
+
+  bool has_align_in_gltf = false;
+  if (skin_idx) {
+    const auto& skin = model.skins.at(*skin_idx);
+    for (auto joint_node_idx : skin.joints) {
+      if (model.nodes.at(joint_node_idx).name == "align") {
+        has_align_in_gltf = true;
+        break;
+      }
+    }
+  }
+  const int merc_joint_offset = has_align_in_gltf ? 0 : 2;
+
   std::vector<anim::CompressedAnim> user_anims;
 
   ArtGroup ag(ag_name);
   std::vector<Joint> joints;
   MercExtractData extract_data;
-  extract("test", extract_data, model, all_nodes, 0, 0, 0);
+  extract("test", extract_data, model, all_nodes, 0, 0, 0, merc_joint_offset);
   ag.mdl = &extract_data.new_model;
   // MercSwapData out;
   // merc_convert(out, extract_data);
@@ -600,7 +621,8 @@ bool run_build_actor(const std::string& mdl_name,
     // convert to game format
     joints = convert_joints(skeleton_joints);
     // get animation from user.
-    user_anims = process_anim(model, skeleton_joints);
+    user_anims = process_anim(model, skeleton_joints, params.master_art_group, params.master_ag_map,
+                              params.framerate);
 
   } else {
     auto identity = math::Matrix4f::identity();

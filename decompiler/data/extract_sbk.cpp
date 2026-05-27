@@ -1,5 +1,6 @@
 #include "extract_sbk.h"
 
+#include <array>
 #include <algorithm>
 #include <cstring>
 #include <span>

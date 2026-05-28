@@ -1840,7 +1840,8 @@
         ((and (not (logtest? (-> this process state-flags) (state-flags board)))
               (time-elapsed? (the-as time-frame (the int (/ (the float (-> this drip-time)) (-> this drip-mult))))
                              (the int (-> this drip-speed))))
-         (let* ((s5-2 (rand-vu-int-range 3 (+ (-> this process node-list length) -1)))
+         ;; og:j1-board changed
+         (let* ((s5-2 (min 64 (rand-vu-int-range 3 (+ (-> this process node-list length) -1))))
                 (v1-328 (vector<-cspace! (new 'stack-no-clear 'vector) (-> this process node-list data s5-2))))
            (when (and (< (- (-> v1-328 y) (-> this process root trans y)) (-> this drip-height)) (< (-> this height) (-> v1-328 y)))
              (set! (-> this drip-joint-index) s5-2)

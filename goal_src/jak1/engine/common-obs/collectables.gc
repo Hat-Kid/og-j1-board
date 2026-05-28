@@ -1036,7 +1036,10 @@
         (remove-setting! 'sfx-volume)
         (remove-setting! 'ambient-volume)
         (send-event *target* 'blend-shape #f))
-      (send-event *target* 'end-mode)
+      ;; og:preserve-this changed
+      (when (and (not (-> *pc-settings* skip-fuel-cell-anim?))
+                 (logtest? (-> *target* control root-prim prim-core action) (collide-action racer)))
+        (send-event *target* 'end-mode))
       (send-event *camera* 'no-intro)
       (send-event *camera* 'clear-entity)
       (ja-channel-set! 0)

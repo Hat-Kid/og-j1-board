@@ -473,7 +473,7 @@
                                      *mod-version-text*
                                      (enum->string speedrun-category (-> *speedrun-info* category))
                                      (if (-> *pc-settings* skip-movies?) "(CS Skips)" "(No CS Skips)")
-                                     (if (-> *pc-settings* skip-fuel-cell-anim?) "(PCCS Skips)" "(PCCS Skips)")
+                                     (if (-> *pc-settings* skip-fuel-cell-anim?) "(PCCS Skips)" "(No PCCS Skips)")
                                      (if (-> *speedrun-info* has-started?) "Yes" "No"))
                       buf
                       4

@@ -405,7 +405,8 @@
 (define-extern can-exit-duck? (function symbol :behavior target))
 
 (defbehavior want-to-board? target ()
-  (and (not (symbol-member? (-> self next-state name) '(target-wheel target-wheel-flip target-hit-ground-hard)))
+  (and (not (symbol-member? (-> self next-state name)
+                            '(target-wheel target-wheel-flip target-hit-ground-hard target-turn-around target-look-around)))
        (or (and (cpad-pressed? (-> self control unknown-cpad-info00 number) r2)
                 (or (!= *cheat-mode* 'debug)
                     (not (logtest? (-> *cpad-list* cpads (-> self control unknown-cpad-info00 number) button0-abs 0) (pad-buttons l2))))

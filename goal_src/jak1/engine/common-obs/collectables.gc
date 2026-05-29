@@ -1035,7 +1035,10 @@
         (remove-setting! 'music-volume)
         (remove-setting! 'sfx-volume)
         (remove-setting! 'ambient-volume)
-        (send-event *target* 'blend-shape #f)
+        (send-event *target* 'blend-shape #f))
+      ;; og:j1-board changed
+      (when (or (not (logtest? (-> *target* control root-prim prim-core action) (collide-action racer)))
+                (= (-> *target* next-state name) 'target-racing-clone-anim))
         (send-event *target* 'end-mode))
       (send-event *camera* 'no-intro)
       (send-event *camera* 'clear-entity)

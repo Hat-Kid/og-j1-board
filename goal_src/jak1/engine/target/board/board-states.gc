@@ -2024,11 +2024,11 @@
       (case message
         (('clone-anim) (go target-board-clone-anim (process->handle (the process (-> block param 0)))))
         (('attack 'attack-or-shove 'attack-invinc)
-         (target-attacked message
-                          (the attack-info (-> block param 1))
-                          proc
-                          (the touching-shapes-entry (-> block param 0))
-                          target-hit))
+         (let* ((att (the attack-info (-> block param 1)))
+                (is-burn? (and (logtest? (-> att mask) (attack-mask mode)) (= (-> att mode) 'burn)))
+                (do-burn-attack? (target-board-burn-attack? self)))
+           (if (or (and is-burn? do-burn-attack?) (not is-burn?))
+             (target-attacked message att proc (the touching-shapes-entry (-> block param 0)) target-hit))))
         (else (target-generic-event-handler proc argc message block))))
   :enter
     (behavior ()

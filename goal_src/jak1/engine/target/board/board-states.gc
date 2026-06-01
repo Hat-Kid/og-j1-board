@@ -2319,8 +2319,8 @@
         ((and (= message 'query) (= (-> block param 0) 'mode)) (-> self state name))
         (else
          (case message
-           ;; fisher softlock hack
-           (('clone-anim) (if (name= (-> proc name) "fisher-1") #t))
+           ;; fisher/billy softlock hack
+           (('clone-anim) (or (name= (-> proc name) "fisher-1") (name= (-> proc name) "billy-2")))
            (('end-mode)
             (cond
               ((and (= (-> proc type symbol) 'fuel-cell) (-> proc entity))
